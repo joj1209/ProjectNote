@@ -1,0 +1,36 @@
+# OS / Explorer
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# VS Code (keep workspace settings out of repo by default)
+.vscode/
+
+# JetBrains
+.idea/
+
+# Temporary / backups
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Archives (optional)
+*.zip
+*.7z
+*.rar
+
+# Node / Python (in case added later)
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
