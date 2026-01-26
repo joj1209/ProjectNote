@@ -1,0 +1,430 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <sqlda.h>
+#include "/apprun/src/dm/com/comlib.h"
+
+#define OK 0
+#define NK -1
+#define SQLCNT (sqlca.sqlerrd[2] )
+
+EXEC SQL BEGIN DECLARE SECTION;
+
+/* SQL Job log variable */ 
+int vs_workcnt;
+int vs_job_step;
+char vs_pgm_id[100+1];
+char vs_pgm_nm[100+1];
+char vs_tbl_nm[100+1];
+char vs_step_nm[100+1];
+int vs_sqlcd;
+char vs_sqlmsg[1000+1];
+char vs_rtn0[100+1];
+char vs_frst_st_time[14+1];
+char vs_st_time[14+1];
+char vs_ed_time[14+1];
+
+/* 커서용 변수 */
+int ii=0; /* Fetch loop 변수 */
+int jj=0; /* 컬럼오류 loop 변수 */
+int kk=0; /* 컬럼type오류 loop 변수 */
+
+/* 검증차수 */
+char vs_seq_d[2+1]; /* 검증결과 등록차수 */     
+int vs_totokinscnt=0; /* 검증결과 정상건 등록건수 */    
+int vs_toterinscnt=0; /* 검증결과오류건 등록건수 */
+
+/* 커서 Fetch용 변수 */
+char vs_vadkdt[8+1]; /* 기준일자 */   
+char vs_dwdmgb[4+1]; /* DWDM구분 */
+char vs_vadtab[100+1]; /* 테이블명 */
+char vs_vadcol[120+1]; /* 컬럼명 */
+char vs_vadtco[120+1]; /* 타겟컬럼명1 */
+char vs_vadgbn[2+1]; /* 검증구분 */
+char vs_vadtyh[2+1]; /* 검증유형 */
+char vs_vadcnt[2+1]; /* 차수 */
+char vs_vadctn[50+1]; /* 검증내용*/
+char vs_vadpgm[100+1]; /* 검증프로그램ID*/
+char vs_vadpam[10+1]; /* 파라미터값*/
+char vs_vadrgb[2+1]; /* 검증결과구분*/
+char vs_vadrva[5000+1]; /* 검증결과값*/
+char vs_vadtym[150+1]; /* 데이터타입명*/
+char vs_vadlen[10+1]; /* 길이*/
+char vs_vaddot[10+1]; /* 소수점길이*/
+char vs_vadrow=0; /* Fetch rownumber 변수*/
+
+/* 체크용 변수선정 */
+char vs_chk_vadtab[100+1]; /* 테이블명 */
+int vs_lastchk_cnt=0;  /* 검증결과 오류건 loop건수 */
+
+/* 적재용 변수선정 */
+char vs_st_date[23+1]; /* 검증시작일시 */
+char vs_err_content[5000+1]; /* 검증결과오류값 */
+char vs_string[5000+1]; /* 검증결과오류값누적 */
+char vs_set_dwdmgb[4+1]; /* SET DWDM구분 */
+char vs_set_vadtab[100+1]; /* SET 테이블명 */
+char vs_set_vadgbn[2+1]; /* SET 검증구분 */
+char vs_set_vadtyh[2+1]; /* SET 검증유형 */
+char vs_set_vadpgm[100+1]; /* SET 검증프로그램ID */
+char vs_set_vadpam[10+1]; /* SET 파라미터값 */
+char vs_set_vadrgb[2+1]; /* SET 검증결과구분 */
+
+
+
+EXEC SQL END DECLARE SECTION;
+long sqlcode;
+
+
+int main(int argc, char *argv[])
+{
+  /* Main 함수 시작 */
+	if (F_MainProc() != OK)
+	{
+		printf("error");
+		return(NK);
+	}
+	printf("ok");
+	return(OK);
+}
+
+
+/* F_MainProc */
+int F_MainProc()
+{
+	EXEC SQL WHENEVER SQLERROR CONTINUE;
+
+
+/* STEP002 프로그램검증현황 SELECT */
+vs_workcnt = 0;
+exec sql
+select lpad(to_char(to_number(nvl(차수),'0')) + 1),2 '0') as 차수
+      , to_char(systimestamp,'YYYYMMDDHH24MISSFF')
+into :vs_seq_d
+     , :vs_st_date
+from BM.프로그램검증현황 N10
+where N10.기준일자 = to_char(sysdate,'YYYYMMDD')
+and N10.검증유형 = '04'
+;
+
+/* STEP008 검증 오류 건수 select */
+vs_workcnt = 0;
+exec sql
+select nvl(count(n10.타겟테이블명),1)
+into :vs_lastchk_cnt
+from BMWRK.프로그램검증현황01_02 n10
+left outer join bmwrk.프로그램검증현황01_01 n11
+on n11.DWDM구분코드 = n10.dwdm구분코드
+and n11.테이블명 = n10.타겟테이블명
+where n11.테이블명 is null
+;
+
+/* STEP009 검증 오류 insert */
+
+
+exec sql declare c1 cursor for
+select to_char(sysdate,'YYYYMMDD') as 기준일자
+, N10.dwdm구분코드
+, trim(n10.타겟테이블명)
+, trim(n10.타겟컬럼명)
+, 'BI메타검증_테이블단위' as 타겟컬럼명1
+, n10.검증구분
+, '04' as 검증유형
+,:vs_seq_d  as 차수
+,n10.검증내용
+,'mcsbm_008'  as 검증프로그램ID
+,'' as 파라미터값
+,'1' as 검증결과구분
+,trim(n10.검증결과값)
+,nvl(n10.데이터타입명,'')
+,nvl(n10.길이,'')
+,nvl(n10.소수점길이,'')
+,row_number() over (partition by n10.dwdm구분코드, n10.타겟테이블명 order by n10.타겟테이블명 )  as rno
+From bmwrk.프로그램검증현황01_02 n10
+left outer join bmwrk.프로그램검증현황01_01 n11
+on n11.dwdm구분코드 = n10.dwdm구분코드
+and n11.테이블명 = n10.타겟테이블명
+where n11.테이블명 is null
+order by n10.dwdm구분코드
+,n10.타겟테이블명
+,n10.검증내용
+;
+
+Exec sql open c1;
+
+Memset(vs_chk_vadtab, 0x00, 101); /* 채크용 테이블명 */
+Memset(vs_err_content, 0x00,5001); /* 검증오류 등록변수 */
+Memset(vs_string, 0x00,5001); /* 검증오류값 누적변수 */
+
+Strcpy(vs_err_content,"");
+Strcpy(vs_string,"");
+
+for ( ii = 0;; ii++)
+{
+  Exec sql fetch c1
+  Into
+ :vs_vadkdt /* 기준일자 */
+,:vs_dwdmgb /* DWDM구분 */
+,:vs_vadtab /* 테이블명 */
+,:vs_vadcol /* 컬럼명 */
+,:vs_vadtco /* 타겟컬럼명1 */
+,:vs_vadgbn /* 검증구분 */
+,:vs_vadtyh /* 검증유형 */
+,:vs_vadcnt /* 차수 */
+,:vs_vadctn /* 검증내용 */
+,:vs_vadpgm /* 검증프로그램ID */
+,:vs_vadpam /* 파라미터값 */
+,:vs_vadrgb /* 검증결과구분 */
+,:vs_vadrva /* 검증결과값 */
+,:vs_vadtym /* 데이터타입명 */
+,:vs_vadlen /* 길이 */
+,:vs_vaddot /* 소수점길이 */
+,:vs_vadrow /* Fetch rownumber 변수 */
+;
+
+vs_sqlcd = sqlca.sqlcode;
+sprintf(vs_sqlmsg, "%s \n",sqlca.sqlerrm.sqlerrmc);
+strcpy(vs_ed_time,(char*)getTime());
+
+if (sqlca.sqlcode !=0 && sqlca.sqlcode != 100) {
+ exec sql call bm.sp_log_adw(:vs_pgm_id:vs_st_time:vs_ed_time:vs_workcnt:vs_sql_cd);
+ break;
+}
+
+/* 테이블검증=> 테이블컬럼검증 => 테이블컬럼TYPE검증 */
+/* --비교 테이블이 다르고 오류로그 저장내용 존재시 테이블단위 오류로그 등록 저장후 비교 테이블 초기화 */
+if (strcmp(vs_vadtab, vs_chk_vadtab) !=0)
+{
+ /*-- 검증오류 DB저장 변수설정 --*/
+  Strcpy(vs_err_content, vs_string);
+  vs_workcnt=0;
+
+  if (strcmp(vs_err_content,"") !=0)
+  {
+    Exec sql
+    Insert into BM.프로그램검증현황
+	(
+ 	기준일자
+	,DWDM구분코드
+	,타겟테이블명
+	,타겟컬럼명
+	,검증구분
+	,검증유형
+	,차수
+	,검증내용
+	,검증프로그램ID	
+	,파라미터값
+	,검증결과구분
+	,검증결과값
+	,검증모수
+	,검증시작일시
+	,적재일시
+	)
+Values
+(
+to_char(sysdate,'YYYYMMDD')
+,:vs_set_dwdmgb
+,:vs_set_vadtab
+,'BI메타검증_테이블단위'
+,:vs_set_vadgbn
+,:vs_set_vadtyh
+,:vs_vadcnt
+,'테이블메타검증'
+,:vs_set_vadpgm
+,:vs_set_vadpam
+,:vs_set_vadrgb
+,:vs_err_content
+,1
+,to_timestamp(:vs_st_date,'YYYYMMDDHH24MISSFF')
+,sysdate
+);
+
+vs_workcnt=SQLCNT;
+vs_toterinscnt=vs_toterinscnt+1;
+
+
+vs_sqlcd = sqlca.sqlcode;
+sprintf(vs_sqlmsg, "%s \n",sqlca.sqlerrm.sqlerrmc);
+strcpy(vs_ed_time,(char*)getTime());
+
+if (sqlca.sqlcode !=0 && sqlca.sqlcode != 100) {
+ exec sql call bm.sp_log_adw(:vs_pgm_id:vs_st_time:vs_ed_time:vs_workcnt:vs_sqlcd);
+ exec sql rollback work release; 
+ return(NK)
+}
+
+/* 체크용 변수 초기화 */
+Memset(vs_err_content,0x00,5001); /* 검증오류 등록변수  */
+Memset(vs_string,0x00,5001); /* 검증오류 등록변수 */
+Memset(vs_set_dwdmgb,0x00,5); /* SET DWDM구분 초기화 */
+Memset(vs_set_vadtab,0x00,101); /* SET 테이블명 초기화*/
+Memset(vs_set_vadgbn,0x00,3); /* SET 검증구분 초기화 */
+Memset(vs_set_vadtyh,0x00,3); /* SET 검증유형 초기화*/
+Memset(vs_set_vadpgm,0x00,101); /* SET 검증프로그램ID 초기화 */
+Memset(vs_set_vadpam,0x00,11); /* SET 파라미터값 초기화 */
+Memset(vs_set_vadrgb,0x00,3); /* SET 검증결과구분 초기화 */
+Strcpy(vs_err_content,"");
+Strcpy(vs_string,"");
+jj=0;
+kk=0;
+}
+}
+
+
+if (strcmp(vs_vadctn, "1테이블검증") ==0)
+{
+ Strcat(vs_string,"\n [ 테이블검증 ]");
+ Strcat(vs_string,"\n -. TABLE : ");
+ Strcat(vs_string,vs_vadtab); 
+ Strcat(vs_string,"\n -.    오류내용 : ");
+ Strcat(vs_string,vs_vadrva);
+}
+Else if (strcmp(vs_vadctn, "2차테이블컬럼검증")==0)
+{
+ If ( jj < 3)
+ {
+  If ( jj == 0)
+  {
+    Strcat(vs_string,"\n [ 테이블컬럼검증 ]");
+    Strcat(vs_string,"\n -. TABLE : ");
+    Strcat(vs_string, vs_vadtab);
+  }
+  Strcat(vs_string,"\n   COLUMN : ");
+  Strcat(vs_string,vs_vadcol);
+  Strcat(vs_string,",  오류내용 : ");
+  Strcat(vs_string,vs_vadrva);
+}
+
+If ( jj == 2)
+{
+ Strcat(vs_string, "\n   상위컬럼외 다수 테이블컬럼명 오류. ");
+}
+jj++;
+}
+Else if (strcmp(vs_vadctn,"3테이블컬럼TYPE검증") == 0 )
+{
+ If (kk < 3)
+ {
+ If (kk == 0)
+ {
+  Strcat(vs_string,"\n[  테이블컬럼TYPE검증 ]");
+  Strcat(vs_string,"\n -. TABLE : ");
+  Strcat(vs_string,vs_vadtab);
+ }
+Strcat(vs_string, "\n COLUMN : "   );
+Strcat(vs_string, vs_vadcol   );
+Strcat(vs_string, ", Type : "   );
+Strcat(vs_string, vs_vadtym   );
+Strcat(vs_string, " 컬럼길이 : "   );
+Strcat(vs_string, vs_vadlen   );
+Strcat(vs_string, " 소수점길이 : "   );
+Strcat(vs_string, vs_vaddot   );
+Strcat(vs_string, " 오류내용 : "   );
+Strcat(vs_string, vs_vadrva   );
+}
+
+If (kk == 2)
+{
+ Strcat(vs_string, "\n  상위컬럼외 다수 테이블컬럼TYPE 오류. ");
+}
+kk++;
+}
+
+/*--등록변수에 값 설정 ----*/
+Memset(vs_set_dwdmgb,0x00,5); /* SET DWDM구분 초기화 */
+Memset(vs_set_vadtab,0x00,101); /* SET 테이블명 초기화*/
+Memset(vs_set_vadgbn,0x00,3); /* SET 검증구분 초기화 */
+Memset(vs_set_vadtyh,0x00,3); /* SET 검증유형 초기화*/
+Memset(vs_set_vadpgm,0x00,101); /* SET 검증프로그램ID 초기화 */
+Memset(vs_set_vadpam,0x00,11); /* SET 파라미터값 초기화 */
+Memset(vs_set_vadrgb,0x00,3); /* SET 검증결과구분 초기화 */
+
+Strcpy(vs_set_dwdmgb, vs_dwdmgb);
+Strcpy(vs_set_vadtab, vs_vadtab );
+Strcpy(vs_set_vadgbn, vs_vadgbn );
+Strcpy(vs_set_vadtyh, vs_vadtyh );
+Strcpy(vs_set_vadpgm, vs_vadpgm );
+Strcpy(vs_set_vadpam, vs_vadpam );
+Strcpy(vs_set_vadrgb, vs_vadrgb );
+
+/* 마지막 검증건 insert */
+If (( vs_lastchk_cnt-1) == ii)
+{
+ If (strcmp(vs_set_vadtab, vs_chk_vadtab) == 0)
+{
+ Strcpy(vs_err_content, vs_string);
+ vs_workcnt=0;
+
+ if (strcmp(vs_err_content,"") != 0) 
+ {
+/* 테이블 단위의 오류로그 저장 */
+Exec sql
+Insert into BM.프로그램검증현황
+(
+ 기준일자
+,DWDM구분코드
+,타겟테이블명
+,타겟컬럼명
+,검증구분
+,검증유형
+,차수
+,검증내용
+,검증프로그램ID
+,파라미터값
+,검증결과구분
+,검증결과값
+,검증모수
+,검증시작일시
+,적재일시
+)
+Values
+(
+ to_char(sysdate,'YYYYMMDD')
+,:vs_set_dwdmgb
+,:vs_set_vadtab
+,'BI메타검증_테이블단위'
+,:vs_set_vadgbn
+,:vs_set_vadtyh
+,:vs_vadcnt
+,'테이블메타검증'
+,:vs_set_vadpgm
+,:vs_set_vadpam
+,:vs_set_vadrgb
+,:vs_err_content
+,1
+,to_timestamp( :vs_st_date, 'YYYYMMDDHH24MISSFF')
+,sysdate
+);
+
+vs_workcnt=SQLCNT;
+vs_toterinscnt=vs_toterinscnt+1;
+
+vs_sqlcd = sqlca.sqlcode;
+sprintf(vs_sqlmsg, "%s \n",sqlca.sqlerrm.sqlerrmc);
+strcpy(vs_ed_time,(char*)getTime());
+
+if (sqlca.sqlcode !=0 && sqlca.sqlcode != 100) {
+ exec sql call bm.sp_log_adw(:vs_pgm_id:vs_st_time:vs_ed_time:vs_workcnt:vs_sqlcd);
+ exec sql rollback work release ;
+ return(NK);
+}
+
+}
+}
+}
+
+/* 체크용 변수 초기화 */
+Memset(vs_chk_vadtab, 0x00,101);  /* 체크용 테이블명 */
+Strcpy(vs_chk_vadtab,vs_vadtab);
+}
+/* fetch for end */
+
+Exec sql close c1;
+
+vs_workcnt = vs_toterinscnt;
+
+exec sql commit work;
+exec sql call bm.sp_log_adw(:vs_pgm_id:vs_st_time:vs_ed_time:vs_workcnt:vs_sqlcd);
+
+return(OK);
+}
