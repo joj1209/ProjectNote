@@ -1,0 +1,357 @@
+CREATE OR REPLACE PROCEDURE sp_log (
+  IN in_prg_id STRING,
+  IN in_prg_nm STRING,
+  IN in_tbl_nm STRING,
+  IN in_prg_tl_nm STRING,
+  IN in_job_base_dt STRING,
+  IN in_job_step_nbr INT64,
+  IN in_frst_job_start_dtl_dttm STRING,
+  IN in_job_start_dtl_dttm STRING,
+  IN in_job_end_dtl_dttm STRING,
+  IN in_data_prcs_cnt STRING,
+  IN in_job_err_ltrs_nbr STRING,
+  IN in_job_err_cntnt INT64,
+  IN in_dml_gbn STRING,
+  IN in_prg_sq STRING,
+  OUT out_value STRING
+)
+BEGIN
+  DECLARE v_runtime STRING;
+  DECLARE v_runtime_1 STRING;
+  DECLARE v_cnt INT64;
+  DECLARE v_temp_cnt INT64;
+  DECLARE vs_job_step_nbr STRING;
+  DECLARE vs_job_err_ltrs_nbr STRING;
+  DECLARE vs_job_prgrs_rslt_cd STRING;
+  DECLARE vs_job_err_cntnt STRING;
+  
+  -- 프로그램 분류 변수
+  DECLARE vs_prg_gb STRING;
+  DECLARE vs_sbj_gb STRING;
+  DECLARE vs_ic_gb STRING;
+  DECLARE vs_schema STRING;
+  DECLARE vs_tbl_nm STRING;
+  
+  -- 카운트 변수
+  DECLARE vs_ins_cnt INT64;
+  DECLARE vs_del_cnt INT64;
+  DECLARE vs_read_cnt INT64;
+  DECLARE vs_rejt_cnt INT64;
+  
+  -- 날짜 변수
+  DECLARE vs_yyyymm STRING;
+  DECLARE vs_job_d STRING;
+  DECLARE vs_work_d STRING;
+  DECLARE vs_bse_smt STRING;
+  DECLARE vs_bse_emt STRING;
+  
+  -- 파싱된 타임스탬프
+  DECLARE dt_frst_start DATETIME;
+  DECLARE dt_start DATETIME;
+  DECLARE dt_end DATETIME;
+  
+  -- 프로그램 ID 파싱 변수
+  DECLARE prg_id_prefix_1 STRING DEFAULT UPPER(SUBSTR(in_prg_id, 1, 1));
+  DECLARE prg_id_prefix_2 STRING DEFAULT UPPER(SUBSTR(in_prg_id, 2, 1));
+  DECLARE prg_id_prefix_3 STRING DEFAULT UPPER(SUBSTR(in_prg_id, 1, 3));
+  DECLARE prg_id_prefix_4 STRING DEFAULT UPPER(SUBSTR(in_prg_id, 1, 4));
+  
+  -- 최종 단계 여부 판단
+  DECLARE is_final_step BOOLEAN DEFAULT FALSE;
+  DECLARE is_error BOOLEAN DEFAULT FALSE;
+  
+  BEGIN
+    -- ========================================
+    -- 1. 초기 설정 및 파싱
+    -- ========================================
+    
+    -- 타임스탬프 파싱
+    SET dt_frst_start = PARSE_DATETIME("%Y%m%d%H%M%S", in_frst_job_start_dtl_dttm);
+    SET dt_start = PARSE_DATETIME("%Y%m%d%H%M%S", in_job_start_dtl_dttm);
+    SET dt_end = PARSE_DATETIME("%Y%m%d%H%M%S", in_job_end_dtl_dttm);
+    
+    -- 런타임 계산
+    SET v_runtime_1 = COALESCE(
+      FORMAT_TIME('%H%M%S', TIME_ADD(
+        TIME '00:00:00',
+        INTERVAL CAST(DATETIME_DIFF(dt_end, dt_frst_start, SECOND) AS INT64) SECOND
+      )),
+      'xx'
+    );
+    
+    SET v_runtime = COALESCE(
+      FORMAT_TIME('%H%M%S', TIME_ADD(
+        TIME '00:00:00',
+        INTERVAL CAST(DATETIME_DIFF(dt_end, dt_start, SECOND) AS INT64) SECOND
+      )),
+      'xx'
+    );
+    
+    -- 기본값 설정
+    SET vs_job_err_cntnt = CAST(in_job_err_cntnt AS STRING);
+    SET vs_job_prgrs_rslt_cd = '99';
+    SET vs_job_err_ltrs_nbr = in_job_err_ltrs_nbr;
+    SET vs_job_step_nbr = LPAD(CAST(in_job_step_nbr AS STRING), 3, '0');
+    
+    -- DML 구분별 카운트 설정
+    SET (vs_ins_cnt, vs_del_cnt, vs_read_cnt, vs_rejt_cnt) = (
+      CASE WHEN in_dml_gbn = 'I' THEN CAST(COALESCE(in_data_prcs_cnt, '0') AS INT64) ELSE 0 END,
+      CASE WHEN in_dml_gbn = 'D' THEN CAST(COALESCE(in_data_prcs_cnt, '0') AS INT64) ELSE 0 END,
+      CASE WHEN in_dml_gbn = 'L' THEN CAST(COALESCE(in_data_prcs_cnt, '0') AS INT64) ELSE 0 END,
+      CASE WHEN in_dml_gbn = 'R' THEN CAST(COALESCE(in_data_prcs_cnt, '0') AS INT64) ELSE 0 END
+    );
+    
+    -- 날짜 변수 설정
+    SET vs_yyyymm = SUBSTR(in_job_base_dt, 1, 6);
+    SET vs_job_d = in_job_base_dt;
+    SET vs_work_d = CASE 
+      WHEN LENGTH(TRIM(in_job_base_dt)) = 6 
+      THEN CONCAT(SUBSTR(in_job_base_dt, 1, 6), '01')
+      ELSE in_job_base_dt 
+    END;
+    SET vs_bse_smt = CONCAT(SUBSTR(in_job_base_dt, 1, 4), SUBSTR(in_job_base_dt, 5, 2), '01');
+    SET vs_bse_emt = FORMAT_DATE(
+      "%Y%m%d", 
+      LAST_DAY(PARSE_DATE("%Y%m", SUBSTR(in_job_base_dt, 1, 6)))
+    );
+    
+    -- ========================================
+    -- 2. 프로그램 분류
+    -- ========================================
+    
+    IF prg_id_prefix_4 = 'MIG_' THEN
+      SET vs_prg_gb = 'MG';
+      SET vs_sbj_gb = 'MG';
+      SET vs_ic_gb = 'INI';
+      SET vs_schema = SUBSTR(in_tbl_nm, 1, STRPOS(in_tbl_nm, '.') - 1);
+      SET vs_tbl_nm = SUBSTR(in_tbl_nm, STRPOS(in_tbl_nm, '.') + 1);
+      
+    ELSEIF prg_id_prefix_3 = 'AEB' THEN
+      SET vs_prg_gb = 'IF';
+      SET vs_sbj_gb = UPPER(SUBSTR(in_prg_id, 4, 3));
+      SET vs_ic_gb = 'CHG';
+      SET vs_schema = vs_sbj_gb;
+      SET vs_tbl_nm = in_tbl_nm;
+      
+    ELSEIF prg_id_prefix_3 = 'WF_' THEN
+      SET vs_prg_gb = 'STG';
+      SET vs_sbj_gb = UPPER(SUBSTR(in_prg_id, 7, 2));
+      SET vs_ic_gb = IF(UPPER(SUBSTR(in_prg_id, 4, 1)) = 'C', 'CHG', 'INI');
+      SET vs_schema = SUBSTR(in_tbl_nm, 1, STRPOS(in_tbl_nm, '.') - 1);
+      SET vs_tbl_nm = SUBSTR(in_tbl_nm, STRPOS(in_tbl_nm, '.') + 1);
+      
+    ELSEIF prg_id_prefix_1 = 'M' THEN
+      SET vs_prg_gb = 'DM';
+      SET vs_sbj_gb = UPPER(SUBSTR(in_prg_id, 4, 2));
+      SET vs_ic_gb = IF(prg_id_prefix_2 = 'I', 'INI', 'CHG');
+      SET vs_schema = SUBSTR(in_tbl_nm, 1, STRPOS(in_tbl_nm, '.') - 1);
+      SET vs_tbl_nm = SUBSTR(in_tbl_nm, STRPOS(in_tbl_nm, '.') + 1);
+      
+    ELSE
+      SET vs_prg_gb = 'DW';
+      SET vs_sbj_gb = UPPER(SUBSTR(in_prg_id, 4, 2));
+      SET vs_ic_gb = IF(prg_id_prefix_2 = 'I', 'INI', 'CHG');
+      SET vs_schema = SUBSTR(in_tbl_nm, 1, STRPOS(in_tbl_nm, '.') - 1);
+      SET vs_tbl_nm = SUBSTR(in_tbl_nm, STRPOS(in_tbl_nm, '.') + 1);
+    END IF;
+    
+    -- ========================================
+    -- 3. 에러 상태 및 최종 단계 판단
+    -- ========================================
+    
+    -- 에러 체크
+    IF COALESCE(in_job_err_ltrs_nbr, '0') = '0' THEN
+      SET vs_job_err_ltrs_nbr = '0';
+      SET vs_job_err_cntnt = ' ';
+      SET vs_job_prgrs_rslt_cd = '00';
+      SET is_error = FALSE;
+    ELSE
+      SET is_error = TRUE;
+    END IF;
+    
+    -- 최종 단계 판단 (step >= 998 또는 에러 발생 시)
+    SET is_final_step = (in_job_step_nbr >= 998 OR is_error);
+    
+    -- ========================================
+    -- 4. 기존 데이터 체크
+    -- ========================================
+    
+    -- dm_log에 이미 존재하는지 확인
+    SET v_cnt = (
+      SELECT COUNT(1) 
+      FROM dm_log 
+      WHERE 프로그램ID = in_prg_id
+        AND 작업시작일시 = dt_frst_start
+    );
+    
+    -- dm_log_temp에 이미 존재하는지 확인
+    SET v_temp_cnt = (
+      SELECT COUNT(1) 
+      FROM dm_log_temp 
+      WHERE 프로그램ID = in_prg_id
+        AND 작업시작일시 = dt_frst_start
+    );
+    
+    -- ========================================
+    -- 5. 로직 분기: 최초 실행 vs 후속 실행
+    -- ========================================
+    
+    IF v_cnt = 0 AND v_temp_cnt = 0 THEN
+      -- ========================================
+      -- 5-1. 최초 실행
+      -- ========================================
+      
+      -- 상세 로그 삽입
+      INSERT INTO dm_log_dtl (
+        영역구분명, 프로그램ID, 단위작업명, 기준일자, 작업단계번호, 작업시작일시,
+        작업단위시작일시, 작업단위종료일시, 작업소요시분초, 작업건수, 작업결과코드,
+        작업에러문자번호, 작업에러내용
+      )
+      VALUES (
+        vs_prg_gb, in_prg_id, in_prg_tl_nm, vs_job_d, vs_job_step_nbr, dt_frst_start,
+        dt_start, dt_end, v_runtime_1, CAST(COALESCE(in_data_prcs_cnt, '0') AS INT64),
+        vs_job_prgrs_rslt_cd, COALESCE(vs_job_err_ltrs_nbr, ' '), COALESCE(vs_job_err_cntnt, ' ')
+      );
+      
+      IF is_final_step THEN
+        -- 최종 단계 또는 에러 발생 시 바로 dm_log에 삽입
+        INSERT INTO dm_log (
+          영역구분명, 주제영역명, 초기변경구분코드, 프로그램ID, 스키마, 테이블명,
+          기준일자, 작업단계번호, 작업시작일시, 작업종료일시, 작업경과시간, 차수,
+          INSERT건수, DELETE건수, READ건수, REJECT건수, 작업종료여부, 작업결과코드,
+          작업에러문자번호, 작업에러내용
+        )
+        VALUES (
+          vs_prg_gb, vs_sbj_gb, vs_ic_gb, in_prg_id, COALESCE(vs_schema, 'ZZ'), vs_tbl_nm,
+          vs_job_d, vs_job_step_nbr, dt_frst_start, dt_end, v_runtime_1, COALESCE(in_prg_sq, ' '),
+          vs_ins_cnt, vs_del_cnt, vs_read_cnt, vs_rejt_cnt, 'Y', vs_job_prgrs_rslt_cd,
+          COALESCE(vs_job_err_ltrs_nbr, ''), COALESCE(vs_job_err_cntnt, ' ')
+        );
+      ELSE
+        -- 중간 단계는 dm_log_temp에 삽입
+        INSERT INTO dm_log_temp (
+          영역구분명, 주제영역명, 초기변경구분코드, 프로그램ID, 스키마, 테이블명,
+          기준일자, 작업단계번호, 작업시작일시, 작업종료일시, 작업경과시간, 차수,
+          INSERT건수, DELETE건수, READ건수, REJECT건수, 작업종료여부, 작업결과코드,
+          작업에러문자번호, 작업에러내용
+        )
+        VALUES (
+          vs_prg_gb, vs_sbj_gb, vs_ic_gb, in_prg_id, COALESCE(vs_schema, 'ZZ'), vs_tbl_nm,
+          vs_job_d, vs_job_step_nbr, dt_frst_start, dt_end, v_runtime_1, COALESCE(in_prg_sq, ' '),
+          vs_ins_cnt, vs_del_cnt, vs_read_cnt, vs_rejt_cnt, 'N', vs_job_prgrs_rslt_cd,
+          COALESCE(vs_job_err_ltrs_nbr, ''), COALESCE(vs_job_err_cntnt, ' ')
+        );
+      END IF;
+      
+    ELSE
+      -- ========================================
+      -- 5-2. 후속 실행
+      -- ========================================
+      
+      -- 상세 로그 삽입
+      INSERT INTO dm_log_dtl (
+        영역구분명, 프로그램ID, 단위작업명, 기준일자, 작업단계번호, 작업시작일시,
+        작업단위시작일시, 작업단위종료일시, 작업소요시분초, 작업건수, 작업결과코드,
+        작업에러문자번호, 작업에러내용
+      )
+      VALUES (
+        vs_prg_gb, in_prg_id, in_prg_tl_nm, vs_job_d, vs_job_step_nbr, dt_frst_start,
+        dt_start, dt_end, v_runtime, CAST(COALESCE(in_data_prcs_cnt, '0') AS INT64),
+        vs_job_prgrs_rslt_cd, COALESCE(vs_job_err_ltrs_nbr, ' '), COALESCE(vs_job_err_cntnt, ' ')
+      );
+      
+      IF is_final_step THEN
+        -- ========================================
+        -- 최종 단계: dm_log_temp → dm_log 이동 (집계)
+        -- ========================================
+        
+        -- temp에서 현재까지의 누적 데이터 조회하여 최종 dm_log에 삽입
+        INSERT INTO dm_log (
+          영역구분명, 주제영역명, 초기변경구분코드, 프로그램ID, 스키마, 테이블명,
+          기준일자, 작업단계번호, 작업시작일시, 작업종료일시, 작업경과시간, 차수,
+          INSERT건수, DELETE건수, READ건수, REJECT건수, 작업종료여부, 작업결과코드,
+          작업에러문자번호, 작업에러내용
+        )
+        SELECT 
+          t.영역구분명,
+          t.주제영역명,
+          t.초기변경구분코드,
+          t.프로그램ID,
+          t.스키마,
+          t.테이블명,
+          t.기준일자,
+          vs_job_step_nbr AS 작업단계번호,  -- 최종 단계 번호
+          t.작업시작일시,
+          dt_end AS 작업종료일시,  -- 현재 종료 시간
+          v_runtime_1 AS 작업경과시간,  -- 전체 경과 시간
+          t.차수,
+          t.INSERT건수 + vs_ins_cnt AS INSERT건수,  -- 누적 + 현재
+          t.DELETE건수 + vs_del_cnt AS DELETE건수,
+          t.READ건수 + vs_read_cnt AS READ건수,
+          t.REJECT건수 + vs_rejt_cnt AS REJECT건수,
+          'Y' AS 작업종료여부,  -- 최종 완료
+          vs_job_prgrs_rslt_cd AS 작업결과코드,
+          COALESCE(vs_job_err_ltrs_nbr, '') AS 작업에러문자번호,
+          COALESCE(vs_job_err_cntnt, '') AS 작업에러내용
+        FROM dm_log_temp t
+        WHERE t.프로그램ID = in_prg_id
+          AND t.작업시작일시 = dt_frst_start;
+        
+        -- temp 데이터 삭제
+        DELETE FROM dm_log_temp
+        WHERE 프로그램ID = in_prg_id
+          AND 작업시작일시 = dt_frst_start;
+          
+      ELSE
+        -- ========================================
+        -- 중간 단계: dm_log_temp 삭제 후 재삽입 (UPDATE 대체)
+        -- ========================================
+        
+        -- 기존 temp 데이터 삭제
+        DELETE FROM dm_log_temp
+        WHERE 프로그램ID = in_prg_id
+          AND 작업시작일시 = dt_frst_start;
+        
+        -- 누적된 값으로 재삽입
+        INSERT INTO dm_log_temp (
+          영역구분명, 주제영역명, 초기변경구분코드, 프로그램ID, 스키마, 테이블명,
+          기준일자, 작업단계번호, 작업시작일시, 작업종료일시, 작업경과시간, 차수,
+          INSERT건수, DELETE건수, READ건수, REJECT건수, 작업종료여부, 작업결과코드,
+          작업에러문자번호, 작업에러내용
+        )
+        SELECT 
+          vs_prg_gb,
+          vs_sbj_gb,
+          vs_ic_gb,
+          in_prg_id,
+          COALESCE(vs_schema, 'ZZ'),
+          vs_tbl_nm,
+          vs_job_d,
+          vs_job_step_nbr,
+          dt_frst_start,
+          dt_end,
+          v_runtime_1,
+          COALESCE(in_prg_sq, ' '),
+          COALESCE(SUM(INSERT건수), 0) + vs_ins_cnt,  -- 기존 누적 + 현재
+          COALESCE(SUM(DELETE건수), 0) + vs_del_cnt,
+          COALESCE(SUM(READ건수), 0) + vs_read_cnt,
+          COALESCE(SUM(REJECT건수), 0) + vs_rejt_cnt,
+          'N',
+          vs_job_prgrs_rslt_cd,
+          COALESCE(vs_job_err_ltrs_nbr, ''),
+          COALESCE(vs_job_err_cntnt, '')
+        FROM dm_log_dtl
+        WHERE 프로그램ID = in_prg_id
+          AND 작업시작일시 = dt_frst_start
+          AND 작업단계번호 < vs_job_step_nbr;  -- 이전 단계들만 집계
+          
+      END IF;
+      
+    END IF;
+    
+    SET out_value = ' ';
+    
+  EXCEPTION WHEN ERROR THEN
+    SET out_value = @@error.message;
+  END;
+END;
