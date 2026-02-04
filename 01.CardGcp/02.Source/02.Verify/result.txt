@@ -1,0 +1,9 @@
+{
+  "filter_type": "stat_dt",
+  "stat_dt": "2026-01-01",
+  "filtered_count": 3829,
+  "metrics": {
+    "상품금액": 123456789.0,
+    "구매횟수": 2983
+  }
+}
