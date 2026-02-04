@@ -1,0 +1,103 @@
+CREATE OR REPLACE PROCEDURE sp_log_array_push(
+  INOUT logs ARRAY<log_struct>,
+
+  IN in_prg_id STRING,
+  IN in_tbl_nm STRING,
+  IN in_prg_tl_nm STRING,
+  IN in_job_base_dt STRING,
+  IN in_job_step_nbr INT64,
+
+  IN in_frst_job_start_dtl_dttm STRING,
+  IN in_job_start_dtl_dttm STRING,
+  IN in_job_end_dtl_dttm STRING,
+
+  IN in_data_prcs_cnt STRING,
+  IN in_job_err_ltrs_nbr STRING,
+  IN in_job_err_cntnt INT64,
+  IN in_dml_gbn STRING,
+  IN in_prg_sq STRING
+)
+BEGIN
+  DECLARE dt_frst DATETIME;
+  DECLARE dt_start DATETIME;
+  DECLARE dt_end DATETIME;
+
+  DECLARE runtime_total STRING;
+  DECLARE runtime_unit STRING;
+
+  DECLARE v_cnt INT64 DEFAULT CAST(COALESCE(in_data_prcs_cnt,'0') AS INT64);
+
+  DECLARE vs_prg_gb STRING;
+  DECLARE vs_sbj_gb STRING;
+  DECLARE vs_ic_gb STRING;
+  DECLARE vs_schema STRING;
+  DECLARE vs_tbl STRING;
+
+  DECLARE p1 STRING DEFAULT UPPER(SUBSTR(in_prg_id,1,1));
+  DECLARE p2 STRING DEFAULT UPPER(SUBSTR(in_prg_id,2,1));
+  DECLARE p3 STRING DEFAULT UPPER(SUBSTR(in_prg_id,1,3));
+  DECLARE p4 STRING DEFAULT UPPER(SUBSTR(in_prg_id,1,4));
+
+  -- 시간 파싱
+  SET dt_frst = PARSE_DATETIME('%Y%m%d%H%M%S', in_frst_job_start_dtl_dttm);
+  SET dt_start = PARSE_DATETIME('%Y%m%d%H%M%S', in_job_start_dtl_dttm);
+  SET dt_end   = PARSE_DATETIME('%Y%m%d%H%M%S', in_job_end_dtl_dttm);
+
+  SET runtime_total = FORMAT_TIME('%H%M%S',
+        TIME_ADD(TIME '00:00:00', INTERVAL DATETIME_DIFF(dt_end, dt_frst, SECOND) SECOND));
+
+  SET runtime_unit = FORMAT_TIME('%H%M%S',
+        TIME_ADD(TIME '00:00:00', INTERVAL DATETIME_DIFF(dt_end, dt_start, SECOND) SECOND));
+
+  -- 프로그램 분류
+  IF p4 = 'MIG_' THEN
+    SET vs_prg_gb='MG'; SET vs_sbj_gb='MG'; SET vs_ic_gb='INI';
+  ELSEIF p3='AEB' THEN
+    SET vs_prg_gb='IF'; SET vs_sbj_gb=SUBSTR(in_prg_id,4,3); SET vs_ic_gb='CHG';
+  ELSEIF p3='WF_' THEN
+    SET vs_prg_gb='STG'; SET vs_sbj_gb=SUBSTR(in_prg_id,7,2);
+    SET vs_ic_gb=IF(SUBSTR(in_prg_id,4,1)='C','CHG','INI');
+  ELSE
+    SET vs_prg_gb='DW'; SET vs_sbj_gb=SUBSTR(in_prg_id,4,2);
+    SET vs_ic_gb=IF(p2='I','INI','CHG');
+  END IF;
+
+  SET vs_schema = SUBSTR(in_tbl_nm,1,STRPOS(in_tbl_nm,'.')-1);
+  SET vs_tbl    = SUBSTR(in_tbl_nm,STRPOS(in_tbl_nm,'.')+1);
+
+  DECLARE rslt STRING DEFAULT IF(COALESCE(in_job_err_ltrs_nbr,'0')='0','00','99');
+
+  -- ARRAY에 누적 (🔥 DML ZERO)
+  SET logs = ARRAY_CONCAT(logs, [
+    STRUCT(
+      in_prg_id,
+      in_prg_tl_nm,
+      vs_tbl,
+      in_job_base_dt,
+      LPAD(CAST(in_job_step_nbr AS STRING),3,'0'),
+
+      dt_frst,
+      dt_start,
+      dt_end,
+
+      runtime_total,
+      runtime_unit,
+
+      IF(in_dml_gbn='I',v_cnt,0),
+      IF(in_dml_gbn='D',v_cnt,0),
+      IF(in_dml_gbn='L',v_cnt,0),
+      IF(in_dml_gbn='R',v_cnt,0),
+
+      rslt,
+      in_job_err_ltrs_nbr,
+      CAST(in_job_err_cntnt AS STRING),
+
+      COALESCE(in_prg_sq,' '),
+
+      vs_prg_gb,
+      vs_sbj_gb,
+      vs_ic_gb,
+      vs_schema
+    )
+  ]);
+END;
