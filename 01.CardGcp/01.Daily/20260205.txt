@@ -1,0 +1,60 @@
+DECLARE v_program_name STRING;
+DECLARE v_table_name STRING;
+DECLARE v_stat_dt STRING;
+DECLARE v_col1 STRING;
+DECLARE v_col2 STRING;
+DECLARE v_filter_col1 STRING;
+DECLARE v_sql STRING;
+
+SET v_program_name = 'MCSQB_113한글01';
+SET v_table_name = 'DM.`한글`';
+SET v_stat_dt = '20260101';
+SET v_col1 = '`한글1`';
+SET v_col2 = '`한글2`';
+SET v_filter_col1 STRING;
+
+SET v_sql = '''
+INSERT INTO U.T
+WITH SEQ_CTE AS
+(
+  SELECT COALESCE(MAX(SEQ),0)+1 AS NEXT_SEQ
+    FROM U.T
+   WHERE TBL_NM = "'''||v_table_name||'''"
+     AND STAT_DT = PARSE_DATE('%Y%m%d',"'''||v_stat_dt||'''")
+),
+ALL_DATA AS
+(
+  SELECT COUNT(1) AS ALL_CNT
+    FROM '''||v_table_name||'''
+),
+FILTER_DATA AS
+(
+  SELECT COUNT(1) AS FILTER_COUNT
+       , SUM('''||v_col1||''') AS '''||v_col1||'''
+       , SUM('''||v_col2||''') AS '''||v_col2||'''
+    FROM `파티쎤일짜` = PARSE_DATE('%Y%m%d',"'''||v_stat_dt||'''")
+),
+JSON_CTE AS
+(
+  SELECT TO_JSON(STRUCT(
+    "'''||v_table_name||'''" AS FILTER_TYPE,
+    "'''||v_stat_dt||'''" AS FILTER_VALUE,
+    FILTER_COUNT AS `FILTER_CNT`,
+    STRUCT(
+      '''||v_col1||''' AS '''||v_col1||''',
+      '''||v_col2||''' AS '''||v_col2||'''  
+    ) AS METRICS
+   )) AS FILTER_JSON
+  FROM FILTER_DATA
+)
+SELECT "'''||v_program_name||'''" AS PRG_NM
+     , "'''||v_table_name||'''" AS TBL_NM
+     , PARSE_DATE('%Y%m%d',"'''||v_stat_dt||'''") AS STAT_DT
+     , SEQ_CTE.NEXT_SEQ AS SEQ
+     , ALL_DATA.ALL_CNT AS ALL_CNT
+     , JSON_CTE.FILTER_JSON AS STATS_CNT
+     , CURRENT_DATETIME('Asia/Seoul')
+   FROM SEQ_CTE, ALL_DAT, FILTER_DATA, JSON_CTE
+''';
+
+EXECUTE IMMEDIATE v_sql;
