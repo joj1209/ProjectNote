@@ -11,6 +11,7 @@ DECLARE v_sql STRING;
 DECLARE v_metric_sum_yn STRING;
 DECLARE v_metric_cnt_yn STRING;
 DECLARE v_filter_yn STRING;
+DECLARE v_use_yn STRING;
 
 SET v_program_name = 'MCSQB_113한글01';
 SET v_table_name = 'DM.`한글`';
