@@ -1,0 +1,2 @@
+mid,v_program_name,v_stat_dt,v_table_name,v_use_yn,v_metric_sum_yn,
+v_sum_col1,v_sum_col2,v_metric_cnt_yn,v_cnt_col1,v_cnt_col2,v_filter_yn,v_filter_col1,v_filter_col2
