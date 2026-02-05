@@ -6,3 +6,5 @@
 2.comMapping 에서 기준일자 default는 js지만 화면박스에서 변경되어 있으면 우선순위는 박스의 값을 참조하라
 
 3.trans 에서 날짜계산 로직 추가 
+
+4.오라클에서는 parse_date -> 
