@@ -1,16 +1,21 @@
 DECLARE v_program_name STRING;
 DECLARE v_table_name STRING;
 DECLARE v_stat_dt STRING;
-DECLARE v_col1 STRING;
-DECLARE v_col2 STRING;
+DECLARE v_sum_col1 STRING;
+DECLARE v_sum_col2 STRING;
+DECLARE v_cnt_col1 STRING;
+DECLARE v_cnt_col2 STRING;
 DECLARE v_filter_col1 STRING;
 DECLARE v_sql STRING;
+DECLARE v_metric_sum_yn STRING;
+DECLARE v_metric_cnt_yn STRING;
 
 SET v_program_name = 'MCSQB_113한글01';
 SET v_table_name = 'DM.`한글`';
 SET v_stat_dt = '20260101';
-SET v_col1 = '`한글1`';
-SET v_col2 = '`한글2`';
+
+SET v_cnt_col1 = '`한글1`';
+SET v_cnt_col2 = '`한글2`';
 SET v_filter_col1 STRING;
 
 SET v_sql = '''
@@ -30,8 +35,8 @@ ALL_DATA AS
 FILTER_DATA AS
 (
   SELECT COUNT(1) AS FILTER_COUNT
-       , SUM('''||v_col1||''') AS '''||v_col1||'''
-       , SUM('''||v_col2||''') AS '''||v_col2||'''
+       , COUNT(DISTINCT '''||v_cnt_col1||''') AS '''||v_cnt_col1||'''
+       , COUNT(DISTINCT '''||v_cnt_col2||''') AS '''||v_cnt_col2||'''
     FROM `파티쎤일짜` = PARSE_DATE('%Y%m%d',"'''||v_stat_dt||'''")
 ),
 JSON_CTE AS
@@ -41,9 +46,9 @@ JSON_CTE AS
     "'''||v_stat_dt||'''" AS FILTER_VALUE,
     FILTER_COUNT AS `FILTER_CNT`,
     STRUCT(
-      '''||v_col1||''' AS '''||v_col1||''',
-      '''||v_col2||''' AS '''||v_col2||'''  
-    ) AS METRICS
+      '''||v_cnt_col1||''' AS '''||v_cnt_col1||''',
+      '''||v_cnt_col2||''' AS '''||v_cnt_col2||'''  
+    ) AS METRICS_CNT
    )) AS FILTER_JSON
   FROM FILTER_DATA
 )
