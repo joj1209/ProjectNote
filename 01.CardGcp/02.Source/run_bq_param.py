@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
+import logging
 import csv
 import json
-import logging
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
-
+from typing import NamedTuple, Optional, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
-
 
 # ============================
 # Config
@@ -19,21 +18,42 @@ logger = logging.getLogger(__name__)
 class Config:
     BASE_DIR = Path(__file__).resolve().parents[1]
     SQL_DIR = BASE_DIR / "sql_param"
-    CSV_PATH = BASE_DIR / "src" / "list" / "bq.csv"
-    JSON_PATH = BASE_DIR / "src" / "list" / "bq.json"
+    SRC_DIR = BASE_DIR/"sql"
+    ENV_DIR = SRC_DIR/"env"
+    MID_ENV_JSON = ENV_DIR/"mid_env.json"
+    MID_JSON_FALLBACK = ENV_DIR/"mid.json"
 
+    DW_LIST = ENV_DIR/"dw/bq.list"
+    DM_LIST = ENV_DIR/"dm/bq.list"
+    DW_JSON = ENV_DIR/"dw/bq.json"
+    DM_JSON = ENV_DIR/"dm/bq.json"
+    
+    DRY_RUN = os.environ.get("DRY_RUN","false").lower() == "true"
 
-# ============================
-# Logging
-# ============================
-class _MaxLevelFilter(logging.Filter):
-    def __init__(self, max_level: int):
-        super().__init__()
-        self._max_level = max_level
+class LazyErrorFileHandler(logging.Handler):
+	def __init__(self,err_path,formatter):
+		logging.Handler.__init__(self,level=logging.ERROR)
+		self._err_path = PAth(err_path)
+		self._formatter = formatter
+		self._fh = None
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        return record.levelno <= self._max_level
+	def emit(self, record):
+		try:
+			if self._fh is None:
+				self._err_path.parent.mkdir(parents=True, exist_ok=True)
+				self._fh = logging.FileHandler(str(self._err_path),encoding="utf-8")
+				self._fh.setLevel(logging.ERROR)
+				self._fh.setFormatter(self._formatter)
+			self._fh.emit(record)
+		except Exception:
+			self.handlerError(record)
 
+	def close(self):
+		try:
+			if self._fh is not None:
+				self._fh.close()
+		finally:
+			logging.Handler.clse(self)
 
 def setup_logging(base_dir: Path) -> Tuple[Path, Path]:
     run_date = datetime.now().strftime("%Y%m%d")
@@ -46,7 +66,8 @@ def setup_logging(base_dir: Path) -> Tuple[Path, Path]:
     out_log = log_dir / (base + ".log")
     err_log = log_dir / (base + ".log.err")
 
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    #fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    fmt = logging.Formatter("{asctime} [{levelname}] {message}", style="{")
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
@@ -60,28 +81,38 @@ def setup_logging(base_dir: Path) -> Tuple[Path, Path]:
     file_out = logging.FileHandler(out_log, encoding="utf-8")
     file_out.setLevel(logging.INFO)
     file_out.setFormatter(fmt)
-    file_out.addFilter(_MaxLevelFilter(logging.WARNING))
-
-    file_err = logging.FileHandler(err_log, encoding="utf-8")
-    file_err.setLevel(logging.ERROR)
-    file_err.setFormatter(fmt)
+    
+		 lazy_err = LazyErrorFileHandler(err_log,fmt)
 
     root.addHandler(console)
     root.addHandler(file_out)
-    root.addHandler(file_err)
+    root.addHandler(lazy_err)
 
     return out_log, err_log
 
 
 # ============================
+# CLI parsing
+# ============================
+def parse_cli_args(argv: List[str]) -> Dict[str, str]:
+    """Parse key=value arguments."""
+    args = {}
+    for token in argv:
+        if "=" not in token:
+            raise ValueError("Invalid arg (expected key=value): {}".format(token))
+        key, value = token.split("=", 1)
+        args[key.strip()] = value.strip()
+    return args
+
+# ============================
 # CSV/JSON handling
 # ============================
-def read_csv_records(csv_path: Path) -> List[Dict[str, str]]:
-    """Read CSV and return list of record dicts."""
+def read_list_csv(list_path: Path) -> List[Dict[str, str]]:
+    list_path = Path(list_path)
     if not csv_path.exists():
         raise FileNotFoundError("CSV file not found: {}".format(csv_path))
 
-    text = csv_path.read_text(encoding="utf-8", errors="replace")
+    text = list_path.read_text(encoding="utf-8", errors="replace")
     text = text.lstrip("\ufeff")  # Strip BOM
 
     reader = csv.DictReader(text.splitlines())
@@ -100,7 +131,6 @@ def read_csv_records(csv_path: Path) -> List[Dict[str, str]]:
 
     return records
 
-
 def save_json(json_path: Path, records: List[Dict[str, str]]) -> None:
     """Write records to JSON file."""
     json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,20 +139,126 @@ def save_json(json_path: Path, records: List[Dict[str, str]]) -> None:
         encoding="utf-8",
     )
 
+def load_min_env():
+	path = Config.MID_ENV_JSON if Config.MID_ENV_JSON.exists() else Config.MID_JSON_FALLBACK
+	if not path.exists():
+		raise FileNotFoundError(f"Missing mid env json: {path}")
+	data = json.loads(path.read_text(encoding="utf-8",errors="replace"))
+	if not isinstance(data, dict):
+		raise ValueError("Invalid mid env json formatt")
+	return path, data
 
-# ============================
-# CLI parsing
-# ============================
-def parse_cli_args(argv: List[str]) -> Dict[str, str]:
-    """Parse key=value arguments."""
-    args = {}
-    for token in argv:
-        if "=" not in token:
-            raise ValueError("Invalid arg (expected key=value): {}".format(token))
-        key, value = token.split("=", 1)
-        args[key.strip()] = value.strip()
-    return args
+def normalize_use_yn(v):
+	return (v or "Y").strip().upper() == "Y"
 
+def record_matches_pgm_id(record,pgm_id):
+	if not pgm_id:
+		return True
+
+	target = pgm_id.strip()
+	rec_mid = (record.get("mid") or "").strip()
+  ec_pgm = (record.get("pgm_id") or "").strip()
+
+	candidates = [rec_pgm]
+	if rec_mid and rec_pgm:
+		candidates.append(rec_mid + "/" + rec_pgm)
+
+	return target in candidates
+
+def split_mid_and_name(pgm_id):
+	s = (pgm_id or "").strip()
+	if "/" in s:
+		left, right = s.aplit("/",1)
+		return left.strip(), right.strip()
+	return "",s
+
+def resolve_sql_path(program_type, record_mid, pgm_id):
+	if record_mid == "bm":
+		sql_root = Config.SQL_DIR
+	else:
+		sql_root = Config.SQL_DIR / program_type
+	mid_from_id, name = split_mid_and_name(pgm_id)
+	return sql_root / name
+
+def build_standard_date(cli_args, mid_env_section, record):
+	if "job_d" in cli_args and cli_args["job_d"]:
+		return cli_args["job_d"].strip()
+
+	env_date = (mid_env_section.get("job_d") or "").strip()
+	if env_date:
+		return env_date
+	return (record.get("job_d") or "").strip()
+
+def build_params(program_type, mid_env_seciotn, record, cli_args):
+	params = {}
+	pgm_id = (record.get("pgm_id") or "").strip()
+	_, filename = split_mid_and_name(pgm_id)
+	program_id = Path(filename).stem
+
+	standard_date = build_stadard_date(cli_args, mid_env_section, record)
+
+	if program_type == "dw":
+		target_table = (
+			cli_args.get("target_table") or record.get("target_table") or "").strip() 
+			job_seq.get("job_seq") or record.get("job_seq") or "").strip()
+			temp_table.get("temp_table") or record.get("temp_table") or "").strip()
+
+		params.update(
+			{
+				"program_id": program_id,
+				"statnard_date": standard_date,
+				"target_table": target_table,
+				"job_seq": job_seq,
+				"temp_table": temp_table,
+			}
+		)
+	elif program_type == "dm":
+		table_name = (cli_args.get("tbl_nm") or record.get("tbl_nm") or "").strip()
+		params.update(
+			{
+				"program_id": program_id,
+				"standard_date": standard_date,
+				"table_name": table_name,
+			}
+		)
+	else:
+		raise ValueError(f"Unknown program_type: {program_type}")
+
+	declared = mid_env_section.get("params") or []
+	declared = [str(x) for x in declared]
+
+	return {k: params.get(k,"") fro k in declared}
+
+def run_bq_query(sql_path, param_dict):
+	sql_text = Path(sql_path).read_text(encoding="utf-8",errors="replace")
+	cmd = ["bq","query", "--quiet", "--use_legacy_sql=false",]
+
+	for k,v in param_dict.items():
+		cmd.append(f"--parameter={k}:STRING:{v}")
+
+	if Config.DRY_RUN:
+		logger.info("-"*60)
+		return
+
+	subprocess.run(
+		cmd,
+		input=sql_text,
+		universal_newlines=True,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		check=Treu,
+	)
+
+def generate_baseline()
+	dw_records = read_list_csv(Confing.DW_LIST)
+	dm_records = read_list_csv(Confing.DM_LIST)
+	save_json(Config.DW_JSON, dw_records)
+	save_json(Config.DM_JSON, dm_records)
+
+	return dw_records, dm_records
+
+def filter_targets(records, cli_args):
+	targets = [r for r in records if normalize_use_yn
 
 # ============================
 # BigQuery execution with parameters
