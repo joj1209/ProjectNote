@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+쇼#!/usr/bin/env python3
 import logging
 import csv
 import json
@@ -258,7 +258,116 @@ def generate_baseline()
 	return dw_records, dm_records
 
 def filter_targets(records, cli_args):
-	targets = [r for r in records if normalize_use_yn
+	targets = [r for r in records if normalize_use_yn(r.get("use_yn"))]
+
+ if "mid" in cli_args and cli_args["mid"] and cli_args["mid"] != "all":
+		mid = cli_args["mid"].strip()
+		targets = [r for r in targets if (r.get("mid") or "").strip() == mid]
+	if "pgm_id" in cli_args and cli_args["pgm_id"]:
+		pgm_id = cli_args["pgm_id"].strip()
+		targets = [r for r in targets if record_matches_pgm_id(r,pgm_id)]
+
+	return targets
+
+def execute_jobs(program_type, mid_env_section, targets, cli_args):
+	total = success = fail = done = 0
+
+	all_cnt = sum(1 for r in targets)
+
+	for record in targets:
+		record_mid = (record.get("mid") or "").strip()
+		pgm_id = (record.get("pgm_id") or "").strip()
+
+		total += 1
+
+		sql_path = resolve_sql_path(program_type,record_mid,pgm_id)
+		if not sql_path.exists():
+			fail += 1
+			done += 1
+			continue
+
+		params_dict = build_params(program_type, mid_env_section,record,cli_args)
+
+		for name in params_dict:
+			logger.info("+----")
+		try:
+			run_bq_query(sql_path, params_dict)
+			success += 1
+		except subprocess.CalledProcessError as e:
+			if e.stdout:
+				logger.error(f" stdout: {e.stdout}")
+			if e.stderr:
+				logger.error(f" stderr: {e.stderr}")
+			fail += 1
+		except Exception as e:
+			fail += 1
+		finally:
+			done += 1
+	return total, done, success, fail
+
+def main() -> int:
+	try:
+		cli_args = parse_cli_args(sys.argv[1:]) if len(sys.argv) > 1 else {}
+	except ValueError as e:
+		logger.error("%s",e)
+		return 1
+
+	mid_for_log = (cli_args.get("mid") or "nomid").strip() or "nomid"
+	out_log, err_log = setup_logging(Config.BASE_DIR,mid_for_log)
+
+	try:
+		env_path,mid_env = load_min_env()
+	except Exception as e:
+		logger.error(f"{e}")
+		return 1
+
+	try:
+		dw_records, dm_records = generate_baseline()
+	except Exception as e:
+		return 1
+
+	want_mid = (cli_args.get("mid") or "").strip()
+	run_dw_all = want_mid == "dw_all"
+	run_dm_all = want_mid == "dm_all"
+
+	totals = {"total":0, "done":0, "success":0, "fail":0}
+
+	dw_section = mid_env.get("dw") or {}
+	dw_cli_args = dict(cli_args)
+	if run_dw_all:
+		dw_cli_args.pop("mid",None)
+	dw_targets = filter_targets(dw_records, dw_cli_args)
+	if run_dw_all or not want_mid or (want_mid and want_mid in [m for m in (dw_section.get("mids") or [])]):
+		if not run_dm_all and dw_targets:
+			t,d,s,f = execute_jobs("dw",dw_section,dw_targets,dw_cli_args)
+			totals["total"] += t  
+			totals["done"] += d 
+			totals["success"] += s
+			totals["fail"] += f
+
+	dm_section = mid_env.get("dm") or {}
+	dm_cli_args = dict(cli_args)
+	if run_dm_all:
+		dm_cli_args.pop("mid",None)
+	dm_targets = filter_targets(dm_records, dm_cli_args)
+
+	if run_dm_all or not want_mid or (want_mid and want_mid in [m for m in (dm_section.get("mids") or [])]):
+		if not run_dw_all and dm_targets:
+			t,d,s,f = execute_jobs("dm",dm_section,dm_targets,dm_cli_args)
+			totals["total"] += t  
+			totals["done"] += d 
+			totals["success"] += s
+			totals["fail"] += f
+	if totals["total"] == 0:
+		return 0
+
+	return 1 if totals["fail"] > 0 else 0
+
+if __name__ == "__main__":
+	raise SystemExit(main()) 
+
+
+
 
 # ============================
 # BigQuery execution with parameters
