@@ -1,10 +1,12 @@
+vs_work_d = vs_job_d = vs_base_dt
+
 vs_yyyymm
 vs_start_date
 vs_end_date
-vs_af_1m
+vs_bef_dt : 전일
+vs_af_1m : 익월
 vs_bf_1m~vs_bf_14m
 vs_bf_24m
-vs_bf_qm : 전분기말월
 vs_bef_smt : 전월초일
 vs_bef_emt : 전월말일
 vs_bbef_emt : 전전월말
