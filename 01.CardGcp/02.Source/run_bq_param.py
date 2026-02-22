@@ -1,4 +1,4 @@
-쇼#!/usr/bin/env python3
+#!/usr/bin/env python3
 import logging
 import csv
 import json
@@ -33,7 +33,7 @@ class Config:
 class LazyErrorFileHandler(logging.Handler):
 	def __init__(self,err_path,formatter):
 		logging.Handler.__init__(self,level=logging.ERROR)
-		self._err_path = PAth(err_path)
+		self._err_path = Path(err_path)
 		self._formatter = formatter
 		self._fh = None
 
@@ -82,7 +82,7 @@ def setup_logging(base_dir: Path) -> Tuple[Path, Path]:
     file_out.setLevel(logging.INFO)
     file_out.setFormatter(fmt)
     
-		 lazy_err = LazyErrorFileHandler(err_log,fmt)
+    lazy_err = LazyErrorFileHandler(err_log,fmt)
 
     root.addHandler(console)
     root.addHandler(file_out)
@@ -157,7 +157,7 @@ def record_matches_pgm_id(record,pgm_id):
 
 	target = pgm_id.strip()
 	rec_mid = (record.get("mid") or "").strip()
-  ec_pgm = (record.get("pgm_id") or "").strip()
+	rec_pgm = (record.get("pgm_id") or "").strip()
 
 	candidates = [rec_pgm]
 	if rec_mid and rec_pgm:
@@ -201,7 +201,8 @@ def build_params(program_type, mid_env_seciotn, record, cli_args):
 		target_table = (
 			cli_args.get("target_table") or record.get("target_table") or "").strip() 
 			job_seq.get("job_seq") or record.get("job_seq") or "").strip()
-			temp_table.get("temp_table") or record.get("temp_table") or "").strip()
+			temp_table.get("temp_table") or record.get("temp_table") or "").strip())
+   
 
 		params.update(
 			{
@@ -249,7 +250,7 @@ def run_bq_query(sql_path, param_dict):
 		check=Treu,
 	)
 
-def generate_baseline()
+def generate_baseline():
 	dw_records = read_list_csv(Confing.DW_LIST)
 	dm_records = read_list_csv(Confing.DM_LIST)
 	save_json(Config.DW_JSON, dw_records)
@@ -260,7 +261,7 @@ def generate_baseline()
 def filter_targets(records, cli_args):
 	targets = [r for r in records if normalize_use_yn(r.get("use_yn"))]
 
- if "mid" in cli_args and cli_args["mid"] and cli_args["mid"] != "all":
+	if "mid" in cli_args and cli_args["mid"] and cli_args["mid"] != "all":
 		mid = cli_args["mid"].strip()
 		targets = [r for r in targets if (r.get("mid") or "").strip() == mid]
 	if "pgm_id" in cli_args and cli_args["pgm_id"]:
@@ -366,173 +367,3 @@ def main() -> int:
 if __name__ == "__main__":
 	raise SystemExit(main()) 
 
-
-
-
-# ============================
-# BigQuery execution with parameters
-# ============================
-def run_bq_query_with_params(
-    sql_path: Path, 
-    program_id: str, 
-    standard_date: str, 
-    target_table: str,
-    job_seq: str,
-    temp_table: str
-) -> None:
-    """Execute BigQuery query with parameterized query using bq CLI."""
-    # Read SQL file
-    sql_text = sql_path.read_text(encoding="utf-8", errors="replace")
-
-    # Build bq command with parameters
-    cmd = [
-        "bq", "query",
-        "--quiet",
-        "--use_legacy_sql=false",
-        "--parameter=program_id:STRING:{}".format(program_id),
-        "--parameter=standard_date:STRING:{}".format(standard_date),
-        "--parameter=target_table:STRING:{}".format(target_table),
-        "--parameter=job_seq:STRING:{}".format(job_seq),
-        "--parameter=temp_table:STRING:{}".format(temp_table),
-    ]
-
-    # Execute query
-    subprocess.run(
-        cmd,
-        input=sql_text,
-        universal_newlines=True,
-        check=True,
-    )
-
-
-# ============================
-# Core logic
-# ============================
-def apply_filters(records: List[Dict[str, str]], cli_args: Dict[str, str]) -> List[Dict[str, str]]:
-    """Filter records by use_yn=Y and CLI filters (mid, vs_pgm_id)."""
-    # Filter by use_yn=Y (treat missing use_yn as Y)
-    filtered = [r for r in records if r.get("use_yn", "Y").upper() == "Y"]
-
-    # Apply mid filter
-    if "mid" in cli_args:
-        target_mid = cli_args["mid"]
-        filtered = [r for r in filtered if r.get("mid", "") == target_mid]
-
-    # Apply vs_pgm_id filter
-    if "vs_pgm_id" in cli_args:
-        target_pgm = cli_args["vs_pgm_id"]
-        filtered = [r for r in filtered if r.get("vs_pgm_id", "") == target_pgm]
-
-    return filtered
-
-
-def execute_sql_jobs(targets: List[Dict[str, str]], overrides: Dict[str, str]) -> Tuple[int, int, int]:
-    """Execute SQL for each target record. Returns (total, success, fail)."""
-    total = success = fail = 0
-
-    for record in targets:
-        # Apply overrides
-        effective = dict(record)
-        effective.update(overrides)
-
-        vs_pgm_id = effective.get("vs_pgm_id", "").strip()
-        vs_job_dt = effective.get("vs_job_dt", "").strip()
-        vs_tbl_id = effective.get("vs_tbl_id", "").strip()
-        job_seq = effective.get("job_seq", "1").strip()  # Default to "1"
-        temp_table = effective.get("temp_table", "").strip()
-
-        if not vs_pgm_id:
-            logger.error("Missing vs_pgm_id in record: %s", effective)
-            fail += 1
-            continue
-
-        # Resolve SQL file path
-        sql_path = Config.SQL_DIR / vs_pgm_id
-        if not sql_path.exists():
-            logger.error("SQL file not found: %s", sql_path)
-            fail += 1
-            continue
-
-        # Execute
-        total += 1
-        logger.info(
-            "%s (mid=%s, vs_job_dt=%s, vs_tbl_id=%s, job_seq=%s, temp_table=%s)",
-            vs_pgm_id,
-            effective.get("mid", ""),
-            vs_job_dt,
-            vs_tbl_id,
-            job_seq,
-            temp_table,
-        )
-
-        try:
-            # Extract program_id from filename (without extension)
-            program_id = sql_path.stem
-            
-            # Execute with parameters
-            run_bq_query_with_params(
-                sql_path=sql_path,
-                program_id=program_id,
-                standard_date=vs_job_dt,
-                target_table=vs_tbl_id,
-                job_seq=job_seq,
-                temp_table=temp_table,
-            )
-            success += 1
-        except subprocess.CalledProcessError as e:
-            logger.error("bq query failed (exit_code=%s)", e.returncode)
-            fail += 1
-
-    return total, success, fail
-
-
-# ============================
-# Entry Point
-# ============================
-def main() -> int:
-    out_log, err_log = setup_logging(Config.BASE_DIR)
-    logger.info("SUCCESS LOG : %s", out_log)
-    logger.info("ERROR LOG   : %s", err_log)
-
-    # Parse CLI arguments
-    try:
-        cli_args = parse_cli_args(sys.argv[1:]) if len(sys.argv) > 1 else {}
-    except ValueError as e:
-        logger.error("%s", e)
-        logger.error(
-            "Usage: python %s [mid=<mid>] [vs_pgm_id=<file.sql>] [vs_job_dt=<yyyymmdd>] [job_seq=<seq>] [temp_table=<table>]",
-            sys.argv[0],
-        )
-        return 1
-
-    # Read CSV and generate JSON baseline
-    try:
-        records = read_csv_records(Config.CSV_PATH)
-        save_json(Config.JSON_PATH, records)
-        logger.info("Generated JSON baseline: %s", Config.JSON_PATH)
-    except Exception as e:
-        logger.error("%s", e)
-        return 1
-
-    # Filter records
-    targets = apply_filters(records, cli_args)
-    if not targets:
-        logger.warning("No targets matched filters: %s", cli_args)
-        return 0
-
-    logger.info("Targets matched: %d", len(targets))
-
-    # Prepare overrides (excluding filter keys)
-    overrides = {k: v for k, v in cli_args.items() if k not in ("mid", "vs_pgm_id")}
-
-    # Execute SQL jobs
-    total, success, fail = execute_sql_jobs(targets, overrides)
-
-    logger.info("=" * 50)
-    logger.info("Total: %d, Success: %d, Fail: %d", total, success, fail)
-
-    return 1 if fail > 0 else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
