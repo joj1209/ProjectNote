@@ -1,0 +1,5 @@
+#dw
+mid,pgm_id,job_d,target_table,job_seq,temp_table,cycle,use_yn
+
+#dm
+mid,pgm_id,job_d,tbl_nm,cycle,use_yn
