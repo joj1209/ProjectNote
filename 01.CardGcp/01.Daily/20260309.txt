@@ -1,0 +1,28 @@
+select 
+n10.청구번호
+n10.매출상품코드
+n10.청구관리번호
+max(n10.회원고객번호)
+max(n10.회원일련번호)
+max(case when (substr(n10.매출상품코드,1,1) in('2','7','8') and (n10.결제일자 <= n11.최종결제일자 or n10.최종수납일자 <> parse_date('%Y-%m-%d','0606-06-06'))) or (substr(n10.매출상품코드,1,1) not in('2','7','8) and (n10.입금완료여부=1 or n10.청구회차 <>0)) then n10.청구회차 else 0 end) 
+,case when max(n10.청구개월수)=0 and count(n10.청구개월수)=1 then max(n10.입금완료여부)
+  when count(n10.청구개월수) >=1 and count(n10.청구개월수)=sum(n10.입금완료여부) then max(n10.입금완료여부)
+  when max(n10.청구개월수)=sum(case when n10.결제일자 <= n11.최종수납일자 or n10.최종수납일자 <> parse_date('%Y-%m-%d','0606-06-06') then n10.입금완료여부 else 0 end) then 1
+else 0
+end
+min(case when n10.결제일자 <=n11.최종결제일자 or n10.최종수납일자 <> parse_date('%Y-%m-%d','0606-06-06') then n10.청구보류구분코드 else 'Z' end)
+from 청구
+,청구기본 n111
+, (select 청구번호,매출상품코드,청구관리번호,청구내역구분코드 from 신용 where 삭제여부=0 and 청구코드='00' group by 청구번호,매출상품코드,청구관리번호,청구내역구분코드) n12
+where n10.청구번호 = n11.청구번호
+and n10.청구번호 = n12.청구번호
+and n10.매출상품코드 = n11.매출상품코드
+and n10.청구관리번호 = n11.청구관리번호
+and n10.청구내역구분코드 = n11.청구내역구분코드
+and n10.청구내역구분코드 = '00' 
+and n10.삭제여부 =0
+group by n10.청구번호, n10.매출상품코드, n10.청구관리번호
+;
+청구 : 100억건
+청구기본 : 2천만건
+위 쿼리의 결과건수는 5천만건  
